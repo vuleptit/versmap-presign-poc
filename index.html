@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <title>Presign Upload POC</title>
+
+  <style>
+    body {
+      font-family: Arial;
+      background: #0f172a;
+      color: #e2e8f0;
+      padding: 20px;
+    }
+
+    .card {
+      background: #1e293b;
+      padding: 16px;
+      border-radius: 12px;
+      margin-bottom: 16px;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+    }
+
+    h2 {
+      margin-top: 0;
+    }
+
+    textarea, input {
+      width: 100%;
+      padding: 8px;
+      margin-top: 8px;
+      border-radius: 8px;
+      border: none;
+      outline: none;
+    }
+
+    button {
+      padding: 10px 16px;
+      border-radius: 8px;
+      border: none;
+      background: #22c55e;
+      color: black;
+      font-weight: bold;
+      cursor: pointer;
+      margin-top: 12px;
+    }
+
+    button:hover {
+      background: #16a34a;
+    }
+
+    .log {
+      font-family: monospace;
+      white-space: pre-wrap;
+      max-height: 400px;
+      overflow-y: auto;
+    }
+
+    .log-item {
+      padding: 6px;
+      margin-bottom: 4px;
+      border-radius: 6px;
+    }
+
+    .info { background: #1e40af; }
+    .success { background: #065f46; }
+    .error { background: #7f1d1d; }
+    .step { background: #334155; }
+
+    .file-block {
+      margin-top: 10px;
+      padding: 8px;
+      border-left: 4px solid #38bdf8;
+    }
+
+    .progress {
+      height: 6px;
+      background: #334155;
+      border-radius: 4px;
+      margin-top: 6px;
+      overflow: hidden;
+    }
+
+    .progress-bar {
+      height: 100%;
+      width: 0%;
+      background: #22c55e;
+      transition: width 0.3s;
+    }
+
+  </style>
+</head>
+
+<body>
+
+<div class="card">
+  <h2>Presigned Upload POC</h2>
+
+  <label>Access Token</label>
+  <textarea id="token" rows="3"></textarea>
+
+  <label>Select Files</label>
+  <input type="file" id="fileInput" multiple />
+
+  <button onclick="upload()">Upload</button>
+</div>
+
+<div class="card">
+  <h3>Logs</h3>
+  <div id="log" class="log"></div>
+</div>
+
+<script>
+const API = "https://versmap-dev.merket.io/api/v1/media/presign";
+
+function addLog(message, type="info") {
+  const div = document.createElement("div");
+  div.className = "log-item " + type;
+  div.textContent = message;
+  document.getElementById("log").appendChild(div);
+}
+
+function createFileBlock(fileName) {
+  const container = document.createElement("div");
+  container.className = "file-block";
+
+  const title = document.createElement("div");
+  title.textContent = "File: " + fileName;
+
+  const progress = document.createElement("div");
+  progress.className = "progress";
+
+  const bar = document.createElement("div");
+  bar.className = "progress-bar";
+
+  progress.appendChild(bar);
+  container.appendChild(title);
+  container.appendChild(progress);
+
+  document.getElementById("log").appendChild(container);
+
+  return bar;
+}
+
+async function upload() {
+  document.getElementById("log").innerHTML = "";
+
+  const token = document.getElementById("token").value.trim();
+  const files = document.getElementById("fileInput").files;
+
+  if (!token || files.length === 0) {
+    addLog("Thiếu token hoặc file", "error");
+    return;
+  }
+
+  // STEP 1
+  addLog("STEP 1: Call Presign API", "step");
+
+  const payload = {
+    files: Array.from(files).map(f => ({
+      filename: f.name,
+      contentType: f.type,
+      fileSizeBytes: f.size
+    }))
+  };
+
+  let presignData;
+
+  try {
+    const res = await fetch(API, {
+      method: "POST",
+      headers: {
+        "Authorization": "Bearer " + token,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(payload)
+    });
+
+    presignData = await res.json();
+
+    addLog("Presign success", "success");
+  } catch (e) {
+    addLog("Presign failed: " + e.message, "error");
+    return;
+  }
+
+  const items = presignData.data || presignData;
+
+  // STEP 2: upload từng file
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i];
+    const { uploadUrl, cdnUrl } = items[i];
+
+    addLog(`Uploading ${file.name}`, "step");
+
+    const progressBar = createFileBlock(file.name);
+
+    try {
+      await uploadWithProgress(uploadUrl, file, progressBar);
+
+      addLog(`SUCCESS: ${file.name}`, "success");
+      addLog(`CDN: ${cdnUrl}`, "info");
+
+    } catch (e) {
+      addLog(`FAIL: ${file.name}`, "error");
+    }
+  }
+
+  addLog("DONE", "success");
+}
+
+// upload có progress thật (XHR thay vì fetch)
+function uploadWithProgress(url, file, progressBar) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+
+    xhr.open("PUT", url);
+
+    xhr.setRequestHeader("Content-Type", file.type);
+
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) {
+        const percent = (e.loaded / e.total) * 100;
+        progressBar.style.width = percent + "%";
+      }
+    };
+
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        progressBar.style.width = "100%";
+        resolve();
+      } else {
+        reject();
+      }
+    };
+
+    xhr.onerror = reject;
+
+    xhr.send(file);
+  });
+}
+</script>
+
+</body>
+</html>
